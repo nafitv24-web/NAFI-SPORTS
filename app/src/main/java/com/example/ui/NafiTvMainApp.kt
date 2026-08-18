@@ -172,7 +172,13 @@ fun NafiTvMainApp() {
                 val sportsM3uUrl = repository.getSavedSportsM3uUrl()
                 val sportsM3uDeferred = async {
                     if (sportsM3uUrl.isNotBlank()) {
-                        repository.parseM3uFromUrl(sportsM3uUrl).map { it.copy(type = MediaType.LIVE_EVENT) }
+                        repository.parseM3uFromUrl(sportsM3uUrl).map {
+                            it.copy(
+                                type = MediaType.LIVE_EVENT,
+                                isLive = true,
+                                status = if (it.status.isBlank()) "LIVE" else it.status
+                            )
+                        }
                     } else emptyList()
                 }
 
@@ -5539,16 +5545,16 @@ fun EventsScreen(
     onSelectMedia: (MediaItem) -> Unit,
     onToggleFavorite: (String) -> Unit
 ) {
-    var selectedCategory by remember { mutableStateOf("Cricket") }
-    var selectedStatus by remember { mutableStateOf("🔴 Live") }
+    var selectedCategory by remember { mutableStateOf("All") }
+    var selectedStatus by remember { mutableStateOf("All") }
 
     // Dynamic categories extracted from all sports matches
     val categories = remember(sports) {
-        val defaultCats = listOf("Cricket", "Football", "Hockey", "More", "All")
+        val defaultCats = listOf("All", "Cricket", "Football", "Hockey", "More")
         val uniqueCats = sports.map { it.category.trim() }.filter { it.isNotBlank() && !it.equals("All", ignoreCase = true) }.distinct()
         (defaultCats + uniqueCats).distinct()
     }
-    val statusFilters = listOf("🔴 Live", "Upcoming", "Today", "Recent Results", "All")
+    val statusFilters = listOf("All", "🔴 Live", "Upcoming", "Today", "Recent Results")
 
     // Live ticking countdown state
     var tickCount by remember { mutableStateOf(0L) }
@@ -5563,18 +5569,18 @@ fun EventsScreen(
         val isLive = isEventLiveNow(item, tickCount)
         val catMatches = when (selectedCategory) {
             "All" -> true
-            "Cricket" -> item.category.contains("Cricket", ignoreCase = true) || item.tournament?.contains("Cricket", ignoreCase = true) == true || item.title.contains("Cricket", ignoreCase = true)
-            "Football" -> item.category.contains("Football", ignoreCase = true) || item.tournament?.contains("Football", ignoreCase = true) == true || item.title.contains("Football", ignoreCase = true)
+            "Cricket" -> item.category.contains("Cricket", ignoreCase = true) || item.tournament?.contains("Cricket", ignoreCase = true) == true || item.title.contains("Cricket", ignoreCase = true) || item.team1?.contains("Cricket", ignoreCase = true) == true
+            "Football" -> item.category.contains("Football", ignoreCase = true) || item.tournament?.contains("Football", ignoreCase = true) == true || item.title.contains("Football", ignoreCase = true) || item.team1?.contains("Football", ignoreCase = true) == true
             "Hockey" -> item.category.contains("Hockey", ignoreCase = true) || item.tournament?.contains("Hockey", ignoreCase = true) == true || item.title.contains("Hockey", ignoreCase = true)
             "More" -> !item.category.contains("Cricket", ignoreCase = true) && !item.category.contains("Football", ignoreCase = true)
             else -> item.category.contains(selectedCategory, ignoreCase = true) || item.tournament?.contains(selectedCategory, ignoreCase = true) == true || item.title.contains(selectedCategory, ignoreCase = true)
         }
         val statusMatches = when (selectedStatus) {
             "All" -> true
-            "🔴 Live" -> isLive
-            "Upcoming" -> !isLive
+            "🔴 Live" -> isLive || item.isLive || item.status.contains("Live", ignoreCase = true)
+            "Upcoming" -> !isLive && !item.isLive
             "Today" -> true
-            "Recent Results" -> !isLive
+            "Recent Results" -> !isLive && !item.isLive
             else -> true
         }
         catMatches && statusMatches
