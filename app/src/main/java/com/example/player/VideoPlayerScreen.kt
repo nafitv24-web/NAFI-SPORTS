@@ -94,6 +94,14 @@ fun VideoPlayerScreen(
     var isBuffering by remember { mutableStateOf(true) }
     var isActuallyBuffering by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var currentVideoResolution by remember { mutableStateOf<String?>(null) }
+
+    // Shared Bandwidth Meter to accurately estimate network throughput and dynamically adapt video quality
+    val bandwidthMeter = remember {
+        androidx.media3.exoplayer.upstream.DefaultBandwidthMeter.Builder(context)
+            .setResetOnNetworkTypeChange(false)
+            .build()
+    }
 
     // Smooth debounce for buffering overlay so micro network fluctuations don't flash intrusive cards over active video
     LaunchedEffect(isBuffering) {
@@ -297,6 +305,7 @@ fun VideoPlayerScreen(
             .setConnectTimeoutMs(20000)
             .setReadTimeoutMs(30000)
             .setUserAgent(finalUserAgent)
+            .setTransferListener(bandwidthMeter)
             .setDefaultRequestProperties(requestHeaders)
 
         val (finalCleanUrl, drmConfig) = com.example.util.DrmHelper.extractDrmConfig(
@@ -326,7 +335,17 @@ fun VideoPlayerScreen(
             .setExtensionRendererMode(androidx.media3.exoplayer.DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
             .setEnableDecoderFallback(true)
 
-        val trackSelector = androidx.media3.exoplayer.trackselection.DefaultTrackSelector(context).apply {
+        // High-responsiveness Adaptive Bitrate Track Selection:
+        // Automatically steps down resolution in 300ms if bandwidth is low (no buffering),
+        // and upgrades smoothly to HD when network throughput is fast and stable.
+        val adaptiveTrackSelectionFactory = androidx.media3.exoplayer.trackselection.AdaptiveTrackSelection.Factory(
+            /* minDurationForQualityIncreaseMs = */ 2500, // 2.5s sustained speed before upgrading
+            /* maxDurationForQualityDecreaseMs = */ 300,  // 300ms ultra-rapid downscaling on network drop to prevent stalls
+            /* minDurationToRetainAfterDiscardMs = */ 1000,
+            /* bandwidthFraction = */ 0.75f               // 75% bandwidth usage ceiling
+        )
+
+        val trackSelector = androidx.media3.exoplayer.trackselection.DefaultTrackSelector(context, adaptiveTrackSelectionFactory).apply {
             setParameters(
                 buildUponParameters()
                     .setExceedRendererCapabilitiesIfNecessary(true)
@@ -334,6 +353,8 @@ fun VideoPlayerScreen(
                     .setAllowAudioMixedMimeTypeAdaptiveness(true)
                     .setAllowMultipleAdaptiveSelections(true)
                     .setTunnelingEnabled(false)
+                    .setForceLowestBitrate(false)
+                    .setForceHighestSupportedBitrate(false)
             )
         }
 
@@ -354,6 +375,7 @@ fun VideoPlayerScreen(
             .setMediaSourceFactory(mediaSourceFactory)
             .setTrackSelector(trackSelector)
             .setLoadControl(loadControl)
+            .setBandwidthMeter(bandwidthMeter)
             .setSeekParameters(androidx.media3.exoplayer.SeekParameters.CLOSEST_SYNC)
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(androidx.media3.common.C.WAKE_MODE_NETWORK)
@@ -432,6 +454,19 @@ fun VideoPlayerScreen(
 
                     override fun onIsPlayingChanged(playing: Boolean) {
                         isPlaying = playing
+                    }
+
+                    override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+                        if (videoSize.width > 0 && videoSize.height > 0) {
+                            val label = when {
+                                videoSize.height >= 1080 -> "1080p HD"
+                                videoSize.height >= 720 -> "720p HD"
+                                videoSize.height >= 480 -> "480p SD"
+                                videoSize.height >= 360 -> "360p Low"
+                                else -> "${videoSize.height}p"
+                            }
+                            currentVideoResolution = label
+                        }
                     }
 
                     override fun onPlayerError(error: PlaybackException) {
@@ -674,6 +709,7 @@ fun VideoPlayerScreen(
             if (showControls) {
                 FullscreenControlsOverlay(
                     media = currentMedia,
+                    currentVideoResolution = currentVideoResolution,
                     servers = servers,
                     selectedServerIndex = selectedServerIndex,
                     onSelectServer = { index ->
@@ -987,7 +1023,7 @@ fun VideoPlayerScreen(
                         color = Color(0xFF2563EB).copy(alpha = 0.8f)
                     ) {
                         Text(
-                            text = "HLS • ${currentMedia.quality}",
+                            text = if (currentVideoResolution != null) "AUTO • $currentVideoResolution" else "AUTO ABR • ${currentMedia.quality}",
                             color = Color.White,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
@@ -1538,7 +1574,7 @@ private fun PlayerBufferingLogoOverlay(
 
                 // Subtitle Badge
                 Text(
-                    text = "NAFI TV 24 • ফাস্ট স্ট্রিমিং",
+                    text = "NAFI TV 24 • অটো অ্যাডাপটিভ স্ট্রিমিং",
                     color = Color(0xFF94A3B8),
                     fontSize = if (isCompact) 9.sp else 10.sp,
                     fontWeight = FontWeight.Normal
@@ -1586,6 +1622,7 @@ private fun FullscreenErrorOverlay(
 @Composable
 private fun FullscreenControlsOverlay(
     media: AppMediaItem,
+    currentVideoResolution: String? = null,
     servers: List<StreamServer>,
     selectedServerIndex: Int,
     onSelectServer: (Int) -> Unit,
@@ -1643,7 +1680,7 @@ private fun FullscreenControlsOverlay(
                         maxLines = 1
                     )
                     Text(
-                        text = "${media.category} • ${media.quality}",
+                        text = if (currentVideoResolution != null) "${media.category} • AUTO ($currentVideoResolution)" else "${media.category} • AUTO ABR (${media.quality})",
                         color = Color(0xFF94A3B8),
                         fontSize = 12.sp
                     )
